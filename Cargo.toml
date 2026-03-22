@@ -2,7 +2,7 @@
 name = "mochizuki"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.89.0"
+rust-version = "1.91.0"
 license = "MIT"
 description = "Generic SQLite + FTS5 database operations: insert, search, upsert, prune, history"
 repository = "https://github.com/pleme-io/mochizuki"
