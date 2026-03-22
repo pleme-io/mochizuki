@@ -234,4 +234,136 @@ mod tests {
         assert_eq!(deleted, 1);
         assert_eq!(db.count("logs").unwrap(), 1);
     }
+
+    #[test]
+    fn execute_with_parameterized_sql() {
+        let db = Database::open_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE kv (id INTEGER PRIMARY KEY, key TEXT, value TEXT)",
+        )
+        .unwrap();
+
+        let affected = db
+            .execute(
+                "INSERT INTO kv (key, value) VALUES (?1, ?2)",
+                &[&"color" as &dyn rusqlite::types::ToSql, &"blue"],
+            )
+            .unwrap();
+        assert_eq!(affected, 1);
+
+        let rows = db
+            .query(
+                "SELECT key, value FROM kv WHERE key = ?1",
+                &[&"color" as &dyn rusqlite::types::ToSql],
+                &["key", "value"],
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].values["value"], "blue");
+    }
+
+    #[test]
+    fn query_returns_correct_column_names() {
+        let db = Database::open_memory().unwrap();
+        db.execute_batch("CREATE TABLE meta (id INTEGER PRIMARY KEY, author TEXT, version TEXT)")
+            .unwrap();
+        db.execute(
+            "INSERT INTO meta (author, version) VALUES (?1, ?2)",
+            &[&"alice" as &dyn rusqlite::types::ToSql, &"1.0"],
+        )
+        .unwrap();
+
+        let rows = db
+            .query("SELECT author, version FROM meta", &[], &["author", "version"])
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].values.contains_key("author"));
+        assert!(rows[0].values.contains_key("version"));
+        assert_eq!(rows[0].values["author"], "alice");
+        assert_eq!(rows[0].values["version"], "1.0");
+    }
+
+    #[test]
+    fn open_memory_creates_usable_database() {
+        let db = Database::open_memory().unwrap();
+        // Should be able to create tables and use them immediately
+        db.execute_batch("CREATE TABLE probe (id INTEGER PRIMARY KEY)")
+            .unwrap();
+        let count = db.count("probe").unwrap();
+        assert_eq!(count, 0);
+
+        db.execute("INSERT INTO probe (id) VALUES (?1)", &[&1_i64 as &dyn rusqlite::types::ToSql])
+            .unwrap();
+        let count = db.count("probe").unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn count_returns_zero_on_empty_table() {
+        let db = Database::open_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE empty_tbl (id INTEGER PRIMARY KEY, data TEXT, ts TEXT DEFAULT (datetime('now')))",
+        )
+        .unwrap();
+        let count = db.count("empty_tbl").unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn multiple_inserts_and_count() {
+        let db = Database::open_memory().unwrap();
+        db.execute_batch("CREATE TABLE nums (id INTEGER PRIMARY KEY, val INTEGER)")
+            .unwrap();
+
+        for i in 1..=10 {
+            db.execute(
+                "INSERT INTO nums (val) VALUES (?1)",
+                &[&i as &dyn rusqlite::types::ToSql],
+            )
+            .unwrap();
+        }
+
+        assert_eq!(db.count("nums").unwrap(), 10);
+    }
+
+    #[test]
+    fn prune_removes_only_old_rows() {
+        let db = Database::open_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE events (id INTEGER PRIMARY KEY, name TEXT, ts TEXT)",
+        )
+        .unwrap();
+
+        // Insert 3 old entries (20 days ago)
+        for name in &["old_a", "old_b", "old_c"] {
+            db.execute(
+                "INSERT INTO events (name, ts) VALUES (?1, datetime('now', '-20 days'))",
+                &[name as &dyn rusqlite::types::ToSql],
+            )
+            .unwrap();
+        }
+
+        // Insert 2 recent entries (now)
+        for name in &["new_x", "new_y"] {
+            db.execute(
+                "INSERT INTO events (name, ts) VALUES (?1, datetime('now'))",
+                &[name as &dyn rusqlite::types::ToSql],
+            )
+            .unwrap();
+        }
+
+        assert_eq!(db.count("events").unwrap(), 5);
+
+        // Prune entries older than 7 days — should remove the 3 old ones
+        let deleted = db.prune("events", "ts", 7).unwrap();
+        assert_eq!(deleted, 3);
+        assert_eq!(db.count("events").unwrap(), 2);
+
+        // Verify the remaining rows are the recent ones
+        let rows = db
+            .query("SELECT name FROM events ORDER BY name", &[], &["name"])
+            .unwrap();
+        assert_eq!(rows[0].values["name"], "new_x");
+        assert_eq!(rows[1].values["name"], "new_y");
+    }
 }
